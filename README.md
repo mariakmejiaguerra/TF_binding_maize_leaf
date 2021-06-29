@@ -1,6 +1,6 @@
 # README #
 This repository includes data and code to generate the figures
-for the paper "Decoding the regulatory architecture of the maize leaf"
+for the paper "![Decoding the regulatory architecture of the maize leaf](https://pubmed.ncbi.nlm.nih.gov/33037196/)"
 
 The R_notebook folder includes text in line with main and supplementary
 figures and the Data folder includes supplementary tables
@@ -22,4 +22,5 @@ Integration of 104 ChIP-seq experiments highlights TF binding redundancy and mod
 
 ### Who do I talk to? ###
 * Maria Katherine Mejia-Guerra (mm2842@cornell.edu)
-* Ed Buckler
+
+Copy from this repository in BitBucket 

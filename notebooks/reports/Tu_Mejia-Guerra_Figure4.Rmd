@@ -1,0 +1,328 @@
+---
+title: "Rules of TF binding"
+output: html_notebook
+editor_options: 
+  chunk_output_type: inline
+---
+
+```{r, echo=FALSE}
+pacman::p_load('dplyr', 'tidyr', 'gapminder',
+               'ggplot2',  'ggalt',
+               'forcats', 'R.utils', 'png', 
+               'grid', 'ggpubr', 'scales',
+               'bbplot','stringr')
+```
+
+```{r, echo=FALSE}
+library(RColorBrewer)
+library(fastcluster) # fast hclust
+library(gplots) # heatmap2
+library(fBasics) # color scales
+library(cba) # adds optimal ordering functionality
+```
+
+
+```{r, echo=FALSE}
+#Helper functions
+'%ni%' <- Negate('%in%')
+
+getmode <- function(v) {
+   uniqv <- unique(v)
+   uniqv[which.max(tabulate(match(v, uniqv)))]
+}
+```
+
+
+```{r, echo=FALSE}
+sessionInfo()
+```
+Next, we assayed the potential for predicting individual TF binding using either sequence information, or co-localization information (Fig 1A). To model TF binding from sequence we applied a machine learning approach (i.e., “bag-of-k-mers”, [1]) to discriminate TF binding regions from other regions in the genome, which resulted in reliable models for all the TFs (5 fold cross-validation, average accuracy for each TF > 70%, Supplementary figure 11). 
+```{r}
+accuracy_preds <- read.delim("/Users/mm2842/p_transcriptionfactors/Figures/Data/bok_accuracy.txt", quote="", stringsAsFactors=FALSE)
+colnames(accuracy_preds) <- c("accuracy")
+fontsize=18
+histogram_bok_accuracy <- ggplot(accuracy_preds, aes(x = accuracy)) +
+  geom_histogram(bins=100, colour = "white", fill = "#009E73", size = 0.1) +
+  geom_vline(aes(xintercept = 0),col='white',size=2) +
+  geom_vline(aes(xintercept = 1),col='white',size=2) +
+  geom_vline(aes(xintercept = median(accuracy_preds$accuracy)),col='darkgreen',size=2) +
+  scale_y_continuous(expand=c(0,0)) +
+  scale_x_continuous(expand=c(0,0), labels = scales::percent_format(accuracy = 1)) +
+  bbc_style() + 
+  labs(title="",
+       y ="count of TFs", 
+       x = "bag-of-kmers models - Accuracy") +
+  theme(axis.title = element_text(size = fontsize, face="bold"),
+        axis.text.x = element_text(face="bold", size=fontsize),
+        axis.text.y = element_text(face="bold", size=fontsize),
+        panel.border = element_blank(), 
+        panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank(), 
+        axis.line = element_line(colour = "black"))
+ggpubr::ggarrange(histogram_bok_accuracy,
+                  labels = c("Supplementary figure 11"), 
+                  font.label=list(size = fontsize+2, face = "bold"))
+```
+
+Using average k-mer weights obtained from the “bag-of-k-mers”, we derived a distance matrix among TFs, and a dendogram to summarize sequence similarity relationships (Fig 4A). After removal of singleton families, we observed that for 85% of them, the majority of their members (>= 50%) belong to the same group in the dendogram (Fig 4A). 
+```{r}
+library(cluster)    # clustering algorithms
+library(factoextra) # clustering visualization
+library(dendextend) # for comparing two dendrograms
+library(dynamicTreeCut)
+library(fastcluster) # fast hclust
+library(RColorBrewer)
+library(ape)
+library(reshape2)
+library(ggtree)
+library(treeio)
+
+#collect average weights from the 5X cross-validation
+load("/Users/mm2842/p_transcriptionfactors/Figures/Data/kmer_weights_df.RData")
+
+# Dissimilarity matrix
+sp_dist <- as.dist(1-cor(t(kmer_weights_df), method="spearman"))
+
+# Hierarchical clustering
+my_dist = sp_dist
+method = "ward.D"
+hc1 <- hclust(my_dist, method = method )
+hcd <- as.dendrogram(hc1)
+new_labels <- sapply(strsplit(labels(hcd) , split='_Zm', fixed=TRUE), function(x) (x[1]))
+labels(hcd) <- new_labels
+
+# Cut tree into groups
+minClusterSize = 4 #PRIOR: minimun number of TFs in the modules from the network analysis
+deepSplit=2 #between 0 and 4
+dynamicCut <- cutreeDynamic(hc1, minClusterSize=minClusterSize, method="hybrid", distM=as.matrix(my_dist), deepSplit=deepSplit, maxCoreScatter=NULL, minGap=NULL, maxAbsCoreScatter=NULL, minAbsGap=NULL)
+
+# Get labels per group
+n <- max(dynamicCut)
+print(n)
+cluster_color <- c("blueviolet","darkgreen","firebrick", "darkorange4", "darkorange3", "dodgerblue3","mediumseagreen","darkorchid4","blue3", "deeppink3")
+cluster_color_colors <- cluster_color[dynamicCut]
+
+hc <- as.hclust(hcd)
+treePhylo <- treeio::as.phylo(hc)
+
+hctree <- ggtree(treePhylo, layout = "circular", size =1) + 
+  geom_tiplab2(size=2, hjust = -0.2) + 
+  geom_tippoint(col = cluster_color_colors, size =3)
+
+#save("hctree", file = "/Users/mm2842/p_transcriptionfactors/Figures/Data/TF_HC_ggtree.Rdata"))
+#plot(as.phylo(hcd), type = "fan", cex = 0.9, tip.color=cluster_color_colors, font=2, lwd=10)
+
+ggpubr::ggarrange(hctree,
+                  labels = c("A"), 
+                  font.label=list(size = fontsize+2, face = "bold"))
+
+```
+
+This observation prompted us to evaluate conservation of TF sequence preferences across species, as TFs families are well conserved across the plant lineage. Using top predictive k-mers for each TF, we examined their similarity to Arabidopsis PWMs[2]. After removal of families that did not have counterpart (or were poorly represented), in the Arabidopsis collection, 50 out of 81 (61%) of the evaluated TFs preferentially matched PWMs to their corresponding family in Arabidopsis (Fig 4B) (TOMTOM (*missing citation*) p-value < 0.001). At family level, we identified 11 out of 14 families that show overall sequence conservation, with >= 50% of their members binding to sequences alike to their Arabidopsis counterpart (Fig 4B).
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+#Fig 4B - Sequence model
+load("/Users/mm2842/p_transcriptionfactors/Figures/Data/Zm_family_conservation_arabidopsis.Rdata")
+Zm_Ath_similarity <- ggplot() + 
+  geom_bar(aes(y = percentage, x = family, fill = match.with.Arabidopsis), data = Zm_family_conservation, stat="identity") +
+  bbc_style() + 
+  scale_fill_manual(values=c("#FD6467","#56B4E9"), name = "Comparison against \nArabidopsis PWMs", labels = c("No similarity","Similarity")) +
+  labs(title="",
+       y ="Percentage", 
+       x = "Maize TF's families") +
+   theme(legend.title = element_text(size = fontsize-4, face="bold"),
+        axis.title = element_text(size = fontsize, face="bold"),
+        axis.text.x = element_text(hjust = 1, face="bold", size=fontsize-2, angle=90),
+        axis.text.y = element_text(face="bold", size=fontsize-2),
+        panel.border = element_blank(), 
+        panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank(), 
+        legend.position="right",
+        axis.line = element_line(colour = "black")) +
+  guides(size = guide_legend(title.position="top", title.hjust = 0.5))
+
+#Zm_Ath_similarity
+ggpubr::ggarrange(Zm_Ath_similarity,
+                  labels = c(""), 
+                  font.label=list(size = fontsize+2, face = "bold"))
+```
+The clustering of Maize TFs with members of the same family based on sequence preferences, and the “motif” similarity between Maize and Arabidopsis TFs, appear driven by similarities among DNA-binding domains, which could favor functional redundancy, as a backup mechanism to maintain system robustness or diversify the regulatory network. 
+
+To model TF binding from co-localization, we adopted a machine learning approach to learn non-linear dependencies among TFs used in the ENCODE project [3]. In brief a co-localization model requires as input: a co-localization matrix for each TF (i.e., “focus TF”) with values of peak intensity for all the overlapping peaks that correspond to remaining TFs (i.e., partner TFs); and a randomized version of the matrix [4]. The output, is a set of combinatorial rules that can predict TF binding (10 models with independent randomized matrices, average accuracy for each TF > 95%), and can be used to derive statistics to inform about the “combinatorial potential” of each TF. We scored the relative importance (RI) of each partner TF for the joint distribution of the set of peaks for a focus TFs; RI can be seen as a summary of the influence of a partner TF with respect to a given focus TF (Supplementary figure 12), and the average RI as a global summary (Fig 4C).  
+### Supplementary figure 13
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+# Computing and visualizing the RI matrix (RIM)
+#First, we defined an aggregate factor importance matrix (RIM) by stacking the RI scores of all
+#factors from all focus-factor contexts. Clustering this matrix revealed
+#the similarities and differences between contexts in terms of the RI of various TFs. 
+#Looking the RIM matrix we can identify broad compositional similarities and differences of focus-factor contexts.
+
+load("/Users/mm2842/Documents/p_maize_TFs/encode_pipeline/aggregate_rulefit_results/summary_tf.RData")
+ #rows are partner_tfs and cols are focus_factors
+temp_RIM <- summary_tf %>% dplyr::inner_join(id_table, by = "Zmtfid") %>% select(-matches("tfid")) %>% select(-matches("TF_Family")) %>% select(-matches("AGPv4_id")) %>% select(-matches("Zmtfid")) %>% select(-matches("ZmTF_No")) %>% select(-matches("code_name"))
+rownames(temp_RIM) <- temp_RIM$tf_name
+#head(temp_RIM, 2)
+temp_RIM <- temp_RIM %>% select(-matches("tf_name"))
+RImat <- as.matrix(temp_RIM)
+load("/Users/mm2842/p_transcriptionfactors/Figures/Data/RI_matrix.RData")
+
+#transpose of the matrix to get rows as focus_factors and columns as partners
+RIM.heatmap <- heatmap.2(t(RImat),
+                         Rowv = F, 
+                         Colv = T, 
+                         dendrogram="both",
+                         hclustfun = function(x) hclust(x,method="ward.D"),
+                             scale="none",
+                             key=T,
+                             key.title = NA,
+                             key.xlab="RI",
+                             margins = c(8, 8),
+                             density.info="none",
+                             trace="none",
+                             sepwidth=c(0.01,0.01),
+                             xlab="",
+                             ylab="",
+                             col=brewer.pal(n=9, name = "YlOrRd"),
+                             sepcolor="grey",
+                             cexRow=0.5,
+                             lhei=c(2, 6),
+                             las = 2)
+
+#RIM.heatmap
+```
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+datalist = list()
+i <- 1
+for (partner in rownames(temp_RIM) ) {
+  tmp_df <- as.data.frame(t(temp_RIM[partner,]))
+  tmp_df$focus_tf <- colnames(temp_RIM)
+  colnames(tmp_df) <- c("RI","Zmtfid")
+  median_val <- median(tmp_df$RI, na.rm=T)
+  mean_val <- mean(tmp_df$RI, na.rm=T)
+  min_tmp_val <-tmp_df %>% dplyr::filter(RI == min(temp_RIM[partner,], na.rm=T))
+  colnames(min_tmp_val) <- c("minRI","Zmtfid")
+  min_tmp_val$partner <- partner
+  
+  tmp_val <-tmp_df %>% dplyr::filter(RI == max(temp_RIM[partner,], na.rm=T))
+  colnames(tmp_val) <- c("minRI","Zmtfid")
+  tmp_val$partner <- partner
+  tmp_val <- tmp_val %>% dplyr::inner_join(min_tmp_val) %>% dplyr::inner_join(id_table, by = "Zmtfid")
+  tmp_val$median <-median_val
+  tmp_val$average <-mean_val
+  tmp_val <- tmp_val %>% dplyr::select(partner, average, median, RI, code_name) 
+  colnames(tmp_val) <- c("partner","average.RI","median.RI","minRI", "maxRI","best_focus_tf")
+  datalist[[i]] <- tmp_val
+  i <- i + 1
+}
+
+big_2data = do.call(rbind, datalist)
+```
+
+```{r, echo=FALSE}
+## Computing and visualizing the average RI
+# Second, we average RI scores of each partner
+# factor from all focus-factor contexts. 
+# Visualize the histogram as the distribution of ‘combinatorial potentials’ 
+
+load("/Users/mm2842/p_transcriptionfactors/Figures/Data/averageRI_values.RData")
+histogram_heat <- ggplot(average.RI_df) +
+  geom_histogram(aes(x = avg.RI, fill = ..x..), bins=20, size = 0.1) +
+  scale_fill_gradient2(low="#FFFFCC", mid="#FEB24C", high="#BD0026", midpoint=40,
+                       breaks=c(0,20,40,60,80),labels=c("0","20","40","60","Maximum")) +
+  bbc_style() + 
+  labs(title="",
+       y ="count of TFs", 
+       x ="average relative importance (RI)") +
+  theme(legend.position = "none",
+        legend.text=element_text(size=10),
+        axis.title = element_text(size = fontsize, face="bold"),
+        axis.text.x = element_text(face="bold", size=fontsize),
+        axis.text.y = element_text(face="bold", size=fontsize),
+        panel.border = element_blank(), 
+        panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank(), 
+        axis.line = element_line(colour = "black"))
+```
+
+```{r, echo=FALSE}
+load("/Users/mm2842/p_transcriptionfactors/Figures/Data/averageRI_values.RData")
+fontsize = 18#25
+histogram_RI <- ggplot(average.RI_df) +
+  geom_histogram(bins = 20, aes(x = avg.RI), color="black", fill = "grey", size = 0.1) +
+  bbc_style() + 
+  labs(title="",
+       y ="count of TFs", 
+       x ="average relative importance (RI)") +
+  theme(legend.position = "none",
+        axis.title = element_text(size = fontsize, face="bold"),
+        axis.text.x = element_text(face="bold", size=fontsize),
+        axis.text.y = element_text(face="bold", size=fontsize),
+        panel.border = element_blank(), 
+        panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank(), 
+        axis.line = element_line(colour = "black"))
+
+ggpubr::ggarrange(histogram_RI,
+                  labels = c(""), 
+                  font.label=list(size = fontsize+2, face = "bold"))
+```
+In addition, we derived a differential importance (DI) score for each TF, that describe how the RI changes between subsets of peaks (i.e., genic proximal and distal) (Supplementary figure 13), and calculated the average DI to score genome-wide bias (Fig 4D).  
+### Supplementary figure 14
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+load("/Users/mm2842/p_transcriptionfactors/Figures/Data/diffvi_matrix.RData")
+rampColscol <- colorRampPalette(brewer.pal(10, "PiYG"))(256)
+diff.vi.heatmap <- heatmap.2(mat_diffvi,
+                             Rowv = F, 
+                             Colv = T, 
+                             dendrogram="both", 
+                             hclustfun = function(x) hclust(x,method="ward.D"),
+                             scale="none",
+                             key=T,
+                             key.xlab="RI bias",
+                             margins = c(8, 8),
+                             density.info="none",
+                             trace="none",
+                             sepwidth=c(0.01,0.01),
+                             xlab="",
+                             ylab="",
+                             col=rampColscol,
+                             sepcolor="grey",
+                             cexRow=0.5,
+                             lhei=c(2, 6),
+                             las = 2)
+```
+
+```{r}
+load("/Users/mm2842/p_transcriptionfactors/Figures/Data/diffvi_matrix.RData")
+#average.diffvi <- colMeans(mat_diffvi, na.rm = TRUE)
+#average.diffvi_df <- data.frame(tf=names(average.diffvi), avg.diffvi=unname(average.diffvi))
+fig4D <- ggplot(average.diffvi_df) +
+  geom_histogram(aes(x = avg.diffvi), color="black", fill = "grey", binwidth=0.05, size = 0.1) +
+  #scale_fill_gradient2(low="#8E0152", mid="#F1EAE0", high="#276419", midpoint=0.0) +
+  bbc_style() + 
+  labs(title="",
+       y ="count of TFs", 
+       x ="differential variable importance") +
+  theme(legend.position="none",
+        axis.title = element_text(size = fontsize, face="bold"),
+        axis.text.x = element_text(face="bold", size=fontsize),
+        axis.text.y = element_text(face="bold", size=fontsize),
+        panel.border = element_blank(), 
+        panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank(), 
+        axis.line = element_line(colour = "black"))
+
+ggpubr::ggarrange(fig4D,
+                  labels = c(""), 
+                  font.label=list(size = fontsize+2, face = "bold"))
+```
+From examination of the RI we identified TFs that have, in general, a low combinatorial potential, as well as examples of TFs that are important partners to predict a large number of focus TFs (Supplementary figure 12). But we found that most of the TFs were important for specific focus TFs, for instance HB66 showed a low RI for all the focus TFs, except for NAC109 (Supplementary figure 12). The stack of DIs for all focus TFs (Supplementary figure 13) as well as the distribution of the average DI (Fig 4D) indicated that for several TFs the relative importance is different between proximal and distal regions. The differences are modest but consistent, and a similar number of TFs were bias towards the proximal and distal regions. Taken together, our co-localization model suggested a large combinatorial space for TF binding sites that likely favors the occurrence of specific combinations –and perhaps specific functions– for different genomic contexts.
+
+We have generated a compendium of regulatory regions consisting of 104 maize TF in-vivo binding profiles, that massively overlaps with open chromatin regions determined with ATAC-seq. The depth and breadth of the data made possible the first system-view of how TFs are organized in monocots leaves, with important implications for understanding the detailed mechanisms and general architecture of the regulatory network that determines molecular and complex plant traits. We have identified over two million TF binding sites that make-up for ~2% of the genome. These sites have low sequence diversity, suggesting that regulatory interactions are under selection, and are genuine functional. TF binding sites were enriched in cis-expression QTLs, and GWAS hits for several traits which illustrate how understanding regulatory mechanisms is crucial to interpreting functional variants. Using this dataset, we have constructed a graph that provides regulatory hypothesis for 50% of the genes in the maize genome. The architecture of the maize leaf regulatory network has a similar topology (scale-free) to others real-world network, with TFs acting as target hubs, and topological modules for which we inferred biological functions. At this stage, an important limitation in our model is the lack of long-range chromatin interaction information to annotate the distal TF binding sites, which account for 30% of our data. However, as other approaches, such as ChIA-Pet and HiChIP, are currently being generated in the community, incorporation of these data will unravel a more complete view with an additional layer of regulatory hypothesis that will enrich the topology of the graph. Finally, we generated quantitative and interpretable models of the data, that indicates substantial redundancy among TF families, and a large number of possible combinations of TF binding site that are key to specificity.  
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+sessionInfo()
+```
+[1. Mejia-Guerra, M. K., & Buckler, E. S. (2019). A k-mer grammar analysis to uncover maize regulatory architecture. BMC Plant Biology, 19(1), 103.](http://doi.org/10.1186/s12870-019-1693-2)  
+[2. O'Malley, R. C., Huang, S.-S. C., Song, L., Lewsey, M. G., Bartlett, A., Nery, J. R., et al. (2016). Cistrome and Epicistrome Features Shape the Regulatory DNA Landscape. Cell, 165(5), 1280–1292.](http://doi.org/10.1016/j.cell.2016.04.038)  
+[3. Gerstein, M. B., Kundaje, A., Hariharan, M., Landt, S. G., Yan, K.-K., Cheng, C., et al. (2012). Architecture of the human regulatory network derived from ENCODE data. Nature, 489(7414), 91–100.](http://doi.org/10.1038/nature11245)  
+[4. Friedman, J. H., & Popescu, B. E. (2008). Predictive learning via rule ensembles. The Annals of Applied Statistics, 2(3), 916–954.](http://doi.org/10.1214/07-AOAS148)  

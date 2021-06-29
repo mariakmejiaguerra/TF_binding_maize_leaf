@@ -1,0 +1,385 @@
+---
+title: "Regulatory Network Inference"
+output: html_notebook
+editor_options: 
+  chunk_output_type: inline
+---
+
+```{r, echo=FALSE}
+pacman::p_load('dplyr', 'tidyr', 'gapminder',
+               'ggplot2',  'ggalt',
+               'forcats', 'R.utils', 'png', 
+               'grid', 'ggpubr', 'scales',
+               'bbplot','stringr')
+```
+
+```{r, echo=FALSE}
+# Load
+library(igraph) #to deal with the network
+library(ggraph) #to plot hive plots
+library(RColorBrewer)
+
+#install.packages("qqman")
+#install.packages("CMplot")
+library(CMplot)
+library(qqman)
+library(GenomicRanges)
+```
+
+
+```{r, echo=FALSE}
+#Helper functions
+'%ni%' <- Negate('%in%')
+
+getmode <- function(v) {
+   uniqv <- unique(v)
+   uniqv[which.max(tabulate(match(v, uniqv)))]
+}
+```
+
+
+```{r, echo=FALSE}
+sessionInfo()
+```
+
+A common limiting factor for large-scale experiments is the signal to noise ratio. In the case of ChIP-seq, these often generate dubious sets of target genes, particularly when the interaction of the binding intensity is not considered. We hypothesize that a graph derived from true regulatory relationships should display topological features that set it apart from randomly connected ones. To test this, we reshaped the regulatory data into a graph to determine the feasibility of our data to pinpoint true regulatory relationships between TFs and target genes. For this we adopted the probabilistic framework used by the ENCODE project to identify high confidence proximal interactions (TIP, P-value < 0.05) [1]. The resulting interactions render a graph with 20,179 nodes (including the 104 TFs) which encompass ~50% of the annotated genes in the maize genome.
+
+The simplest statistic to describe the topology of a network is the distribution of the total number of connections for each node (i.e., the degree), which follows a Poisson distribution for random networks, and for real-world (e.g., biological) networks frequently approximates to a power-law [2]. We evaluate the in-degree distribution (Fig 3A), or number of edges towards each node, and found it to be approximated to a power-law (R^2 = 0.882, P-value < 2e-16) (Fig 3A - inset), a landmark of scale-free networks [2].
+```{r, echo=FALSE}
+#load the graph 
+wdir = "/Users/mm2842/p_transcriptionfactors/Figures/Data/"
+xlnodes <- read.csv(paste0(wdir,"TIPs005_network_NODES.csv"), header=T, as.is=T)
+xllinks <- read.csv(paste0(wdir,"TIPs005_network_EDGES_max_value.csv"), header=T, as.is=T)
+xllinks <-xllinks %>% group_by(source,target) %>% top_n(1, abs(Weight))
+xltfgr <- graph_from_edgelist(as.matrix(xllinks[,c("source","target")]), directed = TRUE)
+V(xltfgr)$indg <-  degree(xltfgr, mode="in")
+V(xltfgr)$alldg <-  degree(xltfgr, mode="all")
+V(xltfgr)$outdg <-  degree(xltfgr, mode="out")
+```
+
+```{r, echo=FALSE}
+#in-degree
+mode = "in"
+d <- igraph::degree(xltfgr, mode = mode)
+dd <- igraph::degree.distribution(xltfgr, mode = mode, cumulative = FALSE)
+degree <- 1:max(d)
+probability <- dd[-1]
+
+#delete blank values
+nonzero.position <- which(probability != 0)
+probability <- probability[nonzero.position]
+degree <- degree[nonzero.position]
+plotnet <- data.frame(probability = probability, degree = degree)
+reg <- lm(log(probability) ~ log(degree))
+#print(summary(reg))
+cf <- coef(reg)
+r2d2 = round(summary(reg)$r.squared, 3)
+
+fontsize = 12
+indegree_dist_qq <- ggplot(plotnet, aes(y=probability, x=degree)) +
+    geom_point(col = "#00A08A") +
+    geom_smooth(method="lm", se=FALSE, col = "darkgrey", linetype="dashed")  +
+    scale_x_continuous(expand=c(0,0), trans="log10") + 
+    scale_y_continuous(expand=c(0,0), trans="log10") +
+    bbc_style() + 
+    labs(title="",
+       y ="log(Probability)", 
+       x = "log(in-degree)") +
+    theme(axis.title = element_text(size = fontsize+2, face="bold"),
+        axis.text.x = element_text(face="bold", size=fontsize),
+        axis.text.y = element_text(face="bold", size=fontsize),
+        panel.border = element_blank(), 
+        panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank(), 
+        axis.line = element_line(colour = "black"))
+
+xltfgr_all <- data.frame(indg=V(xltfgr)$indg, degree=V(xltfgr)$alldg, outdg=V(xltfgr)$outdg )
+
+#fontsize=25 #25
+indegree_dist <- ggplot(xltfgr_all, aes(x = indg)) + 
+  geom_histogram(bins = 40, colour = "black", fill = "#00A08A") +
+  scale_x_continuous(expand=c(0,0), labels = comma) + 
+  scale_y_continuous(expand=c(0,0), labels = comma) +
+  bbc_style() + 
+  labs(title="",
+       y ="Count of nodes", 
+       x = "in-degree") +
+  theme(axis.title = element_text(size = fontsize, face="bold"),
+        axis.text.x = element_text(face="bold", size=fontsize),
+        axis.text.y = element_text(face="bold", size=fontsize),
+        panel.border = element_blank(), 
+        panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank(), 
+        axis.line = element_line(colour = "black"))
+
+
+fig3A <- indegree_dist + annotation_custom(ggplotGrob(indegree_dist_qq), xmin = 30, xmax = 80, ymin = 2000, ymax = 4000)
+ggarrange(indegree_dist, indegree_dist_qq, labels = c("3A", "3A-inset"))
+```
+In scale-free topology, some nodes are considered critical for information flow (i.e., hubs), and appear more connected than others. We defined “hubs”, as nodes at the top percentile of the in-degree distribution (99th percentile), and obtained a set of 206 hubs-candidate genes (Supplementary figure 8A). A gene ontology (GO) analysis of the hubs-candidate genes showed statistical significant and strong enrichment for transcription regulation activity (molecular function, enrichment 4X; biological process, enrichment 4X) (Supplementary figure 8B-C), consistent with the role that hub nodes play in the transcriptional regulatory network.
+```{r, echo=FALSE}
+#Supplementary figure 1 
+img <- png::readPNG("/Users/mm2842/p_transcriptionfactors/Figures/R_notebooks/png_files/Suppfigure3_cartoon.png")
+cartoon_supfig1 <- grid::rasterGrob(img, interpolate=TRUE)
+
+hubs_GO <- read.delim("/Users/mm2842/p_transcriptionfactors/Figures/Data/GO_enrichment_HUBs_targets_vs_TIPs_005.tsv", sep="\t", header = TRUE)
+hubs_GO$plotval <- -1 * log10(hubs_GO$p.value)
+hubs_GO$Description = stringr::str_wrap(hubs_GO$Description, width = 10)
+
+fontsize <- 17
+topn <- 3
+GOtype <- "Biological process"
+BP_annotation <- hubs_GO %>% dplyr::filter(GO.type == "BP") %>% dplyr::filter(Shown == "True") %>% dplyr::filter(Log2.Enrichment > 0)
+BP_annotation$Description <- factor(BP_annotation$Description, levels = BP_annotation$Description[order(BP_annotation$plotval)])
+top_module <- top_n(BP_annotation, n=topn, plotval)
+
+hubs_BP<- ggplot(top_module, aes(x=Description, y=plotval)) +
+  geom_bar(stat="identity", fill ="#F1BB7B") + coord_flip() +
+  bbc_style() + 
+  labs(title="",
+       y ="-log10(P-value)", 
+       x = paste0("GO terms - ",GOtype)) +
+  theme(axis.title = element_text(size = fontsize, face="bold"),
+        axis.text.x = element_text(face="bold", size=fontsize),
+        axis.text.y = element_text(face="bold", size=fontsize),
+        panel.border = element_blank(), 
+        panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank(), 
+        axis.line = element_line(colour = "black"))
+
+GOtype <- "Celular component"
+CC_annotation <- hubs_GO %>% dplyr::filter(GO.type == "CC") %>% dplyr::filter(Shown == "True") %>% dplyr::filter(Log2.Enrichment > 0)
+CC_annotation$Description <- factor(CC_annotation$Description, levels = CC_annotation$Description[order(CC_annotation$plotval)])
+top_module <- top_n(CC_annotation, n=topn, plotval)
+
+hubs_CC<- ggplot(top_module, aes(x=Description, y=plotval)) +
+  geom_bar(stat="identity", fill ="#FD6467") + coord_flip() +
+  bbc_style() + 
+  labs(title="",
+       y ="-log10(P-value)", 
+       x = paste0("GO terms - ",GOtype)) +
+  theme(axis.title = element_text(size = fontsize, face="bold"),
+        axis.text.x = element_text(face="bold", size=fontsize),
+        axis.text.y = element_text(face="bold", size=fontsize),
+        panel.border = element_blank(), 
+        panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank(), 
+        axis.line = element_line(colour = "black"))
+
+
+GOtype <- "Molecular function"
+MF_annotation <- hubs_GO %>% dplyr::filter(GO.type == "MF") %>% dplyr::filter(Shown == "True") %>% dplyr::filter(Log2.Enrichment > 0)
+MF_annotation$Description <- factor(MF_annotation$Description, levels = MF_annotation$Description[order(MF_annotation$plotval)])
+top_module <- top_n(MF_annotation, n=topn, plotval)
+
+hubs_MF<- ggplot(top_module, aes(x=Description, y=plotval)) +
+  geom_bar(stat="identity", fill ="#D67236") + coord_flip() +
+  bbc_style() + 
+  labs(title="",
+       y ="-log10(P-value)", 
+       x = paste0("GO terms - ",GOtype)) +
+  theme(axis.title = element_text(size = fontsize, face="bold"),
+        axis.text.x = element_text(face="bold", size=fontsize),
+        axis.text.y = element_text(face="bold", size=fontsize),
+        panel.border = element_blank(), 
+        panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank(), 
+        axis.line = element_line(colour = "black"))
+
+supplementary1 <- ggpubr::ggarrange(cartoon_supfig1,hubs_MF, hubs_BP, hubs_CC, 
+          ncol = 2, nrow = 2, labels = c("A", "B", "C","D"), 
+          font.label=list(size = fontsize+2, face = "bold"))
+
+#cowplot::save_plot("/Users/mm2842/Desktop/MaizeMeeting2019/plot.pdf", supplementary1)
+#to-do: learn how to use cowplot so I can have the figures in the proper format
+#http://www.sthda.com/english/wiki/wiki.php?id_contents=7930#cowplot-publication-ready-plots
+```
+
+```{r, echo=FALSE}
+annotate_figure(ggpubr::ggarrange(cartoon_supfig1, labels = c("A"), 
+          font.label=list(size = fontsize+2, face = "bold")),
+               top = text_grob("Supplementary figure 8", color = "black", face = "bold", size = 14)
+)
+
+```
+
+```{r, echo=FALSE}
+ggpubr::ggarrange(hubs_MF, labels = c("B"), 
+          font.label=list(size = fontsize+2, face = "bold"))
+```
+```{r, echo=FALSE}
+ggpubr::ggarrange(hubs_BP, labels = c("C"), 
+          font.label=list(size = fontsize+2, face = "bold"))
+```
+
+```{r, echo=FALSE}
+ggpubr::ggarrange(hubs_CC, labels = c("D"), 
+          font.label=list(size = fontsize+2, face = "bold"))
+```
+True biological networks, from food webs to protein-protein interaction networks, often exhibit topological and/or functional modularity *missing citations*.To determine topological modularity, we built a null distribution from an ensemble of random rewired graphs (H0: 1000 rewired graphs), while maintaining the number of nodes and number of edges per node, calculating for each a maximum modularity parameter [3]. This analysis shows statistically significant differences in modularity, which was large in in our graph (P-value < 0.05) versus randomly rewired ones (Supplementary figure 9). 
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+modularity_rewired_res <- read.delim("/Users/mm2842/p_transcriptionfactors/Figures/Data/modularity_rewired_results.tsv", sep="\t")
+
+comm_true <- cluster_louvain(as.undirected(xltfgr))
+true_modularity<- modularity(as.undirected(xltfgr), comm_true$membership)
+
+fontsize=18#25
+modularity_hist <- ggplot(modularity_rewired_res, aes(x = max_modularity)) + 
+   geom_histogram(binwidth=0.001, alpha = 0.5,position = 'identity', color = 'black', fill='grey')+
+   geom_vline(aes(xintercept = true_modularity), col='black',size=1, linetype = "solid") +
+   geom_vline(aes(xintercept = 0.07943593), col='red',size=1, linetype = "dashed") +
+   geom_vline(aes(xintercept = 0.08539839), col='red',size=1, linetype = "dashed") +
+   geom_vline(aes(xintercept = 0.08241716), col='black',size=1, linetype = "dotted") +
+   scale_x_continuous(expand=c(0,0), limits = c(0.07,0.17)) + 
+   scale_y_continuous(expand=c(0,0), limits = c(0,300)) +
+   bbc_style() + 
+   labs(title="",
+       y ="Count of random rewired \ngraphs", 
+       x = "Modularity") +
+   theme(axis.title = element_text(size = fontsize, face="bold"),
+        axis.text.x = element_text(face="bold", size=fontsize),
+        axis.text.y = element_text(face="bold", size=fontsize),
+        panel.border = element_blank(), 
+        panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank(), 
+        axis.line = element_line(colour = "black"))
+
+ggarrange(modularity_hist, labels = c("Supplementary figure 9"))
+```
+
+From a graph-theoretical point of view, we identified a total of seven modules, each containing from ~27% to ~5% of the total nodes (Fig 3B). Subgraphs containing only edges within the nodes from each module correspond only to ~40% of the edges, with ~60% of the edges among modules, which suggests a large information flow between modules (Fig 3B).
+
+```{r, echo=FALSE}
+#a meta network
+node_color <- c("#E69F00", "#56B4E9", "darkgrey", "#F0E442", "#009E73", "#9999CC", "#E34234")
+
+wdir = "/Users/mm2842/p_transcriptionfactors/Figures/Data/"
+modnodes <- read.csv(paste0(wdir,"module_as_network_NODES.csv"), header=T, as.is=T)
+modnodes$family <- stringr::str_replace(modnodes$family,"/","\n")
+modlings <- read.csv(paste0(wdir,"module_as_network_EDGES.csv"), header=T, as.is=T)
+module_net <- graph_from_edgelist(as.matrix(modlings[,c("source","target")]), directed = FALSE)
+
+E(module_net)$type <- ifelse(is.loop(module_net), "inter","intra")
+E(module_net)$weight <- as.numeric(modlings[,3])
+E(module_net)$color <- 'darkgrey'
+V(module_net)$size <- as.numeric(modnodes[,3])*130
+
+plot(module_net,
+     layout=layout.circle,
+     vertex.size=as.numeric(modnodes[,3])*210,
+     vertex.label.color="black",
+     vertex.label.family="Times",                  
+     vertex.label.font=1,
+     vertex.label.cex=1,
+     vertex.color = adjustcolor(node_color, alpha.f = .5),
+     vertex.label.color = adjustcolor("black", .99),
+     vertex.label = as.character(modnodes[,4]),
+     edge.width=E(module_net)$weight*50, 
+     edge.color = ifelse(is.loop(module_net), "blue","black"),
+     edge.arrow.size=.1, 
+     edge.curved=.3,
+     edge.lty="solid")
+
+# edge.lty could be 0 or “blank”, 1 or “solid”, 2 or “dashed”, 3 or “dotted”, 4 or “dotdash”, 5 or “longdash”, 6 or “twodash”)
+
+```
+
+
+Next, we sought to determine if topological modularity could be related with functional modularity. For this, target genes present in each module were evaluated for enrichment of GO terms (biological processes). We found that all the modules were enriched for GO terms, with low overlap between them, suggesting functional modularity on top of the topological modularity (Supplementary figure 10).
+```{r, echo=FALSE}
+#Fig 3D
+#require stringr
+modules_GO <- read.delim("/Users/mm2842/p_transcriptionfactors/Figures/Data/modules_GO_terms_BP.tsv", sep="\t", header = TRUE)
+modules_GO$plotval <- -1 * log10(modules_GO$p.value)
+modules_GO$Description = stringr::str_wrap(modules_GO$Description, width = 20)
+
+#node_color <- c("#E69F00", "#56B4E9", "darkgrey", "#F0E442", "#009E73", "#9999CC", "#E34234")
+fontsize=12#25
+modules_plots = list()
+n_terms=3
+for(module in 1:7){
+  one_module <- modules_GO %>% dplyr::filter(Module == module) %>% dplyr::filter(Log2.Enrichment > 0)
+  one_module$Description <- factor(one_module$Description, levels = one_module$Description[order(one_module$plotval)])
+  top10_one_module <- top_n(one_module, n=n_terms, plotval)
+
+  plot_module <- ggplot(top10_one_module, aes(x=Description, y=plotval)) +
+    geom_bar(stat="identity", fill=node_color[module]) + coord_flip() +
+    bbc_style() + 
+    labs(title="",
+       y ="-log10(P-value)", 
+       x = paste0("module ",module)) +
+    theme(axis.title = element_text(size = fontsize, face="bold"),
+        axis.text.x = element_text(face="bold", size=fontsize),
+        axis.text.y = element_text(face="bold", size=fontsize),
+        panel.border = element_blank(), 
+        panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank(), 
+        axis.line = element_line(colour = "black"))
+  
+  modules_plots[[module]] <- plot_module
+}
+
+ggpubr::ggarrange(modules_plots[[1]],
+                  modules_plots[[2]],
+                  modules_plots[[3]],
+                  modules_plots[[4]],
+                  modules_plots[[5]],
+                  modules_plots[[6]],
+                  modules_plots[[7]],
+                  labels = c("A","B","C","D","E","F","G"),
+                  font.label=list(size = 10, face = "bold"))
+```
+
+```{r, echo=FALSE}
+annotate_figure(ggpubr::ggarrange(modules_plots[[1]], 
+                  labels = c("A"), 
+                  font.label=list(size = fontsize+2, face = "bold")),
+               top = text_grob("Supplementary figure 10", color = "black", face = "bold", size = 14)
+)
+
+```
+
+```{r, echo=FALSE}
+ggpubr::ggarrange(modules_plots[[2]],
+                  labels = c("B"), 
+                  font.label=list(size = fontsize+2, face = "bold"))
+```
+
+```{r, echo=FALSE}
+ggpubr::ggarrange(modules_plots[[3]],
+                  labels =c("C"),
+                  font.label=list(size = fontsize+2, face = "bold"))
+```
+
+```{r, echo=FALSE}
+ggpubr::ggarrange(modules_plots[[4]],
+                  labels =c("D"),
+                  font.label=list(size = fontsize+2, face = "bold"))
+```
+
+```{r, echo=FALSE}
+ggpubr::ggarrange(modules_plots[[5]],
+                  labels =c("E"),
+                  font.label=list(size = fontsize+2, face = "bold"))
+```
+
+```{r, echo=FALSE}
+ggpubr::ggarrange(modules_plots[[6]],
+                  labels =c("F"),
+                  font.label=list(size = fontsize+2, face = "bold"))
+```
+
+```{r, echo=FALSE}
+ggpubr::ggarrange(modules_plots[[7]],
+                  labels =c("G"),
+                  font.label=list(size = fontsize+2, face = "bold"))
+```
+We found two photosynthesis-related modules. Module 4 mainly corresponds to genes regulated by two GLK transcription factors [4], while module 5 mainly correspond to target genes for CONSTANS(CO)-like TFs (Fig 3B). GLK and CO are known regulator of photosynthesis and related plant developmental processes (*missing citations*). Both, module 4 and 5 are enriched for “response to high light intensity”, and “response to low light intensity”, with module 4 be highly specialized and module 5 more general (as several GO terms appear enriched in addition to PS), which might suggest a split in the detailed mode of action of different TFs (Supplementary figure 3). Our evaluation of the topological features of the maize leaf regulatory graph not only served as a validation of the known TF to target gene interactions, but also provide new clues to understand those uncharacterized genes and TFs.  
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+sessionInfo()
+```
+[1. Cheng, C., Min, R., & Gerstein, M. (2011). TIP: A probabilistic method for identifying transcription factor target genes from ChIP-seq binding profiles. Bioinformatics (Oxford, England), 27(23), 3221–3227.](http://doi.org/10.1093/bioinformatics/btr552)     
+[2. Barabási, A.-L., & Albert, R. (1999). Emergence of Scaling in Random Networks. Science, 286(5439), 509–512.](http://doi.org/10.1126/science.286.5439.509)   
+[3. Clauset, A., Newman, M. E. J., & Moore, C. (2004). Finding community structure in very large networks. Physical Review. E, Statistical, Nonlinear, and Soft Matter Physics, 70(6 Pt 2), 066111.](http://doi.org/10.1103/PhysRevE.70.066111)    
+[4. Waters, M. T., Wang, P., Korkaric, M., Capper, R. G., Saunders, N. J., & Langdale, J. A. (2009). GLK transcription factors coordinate expression of the photosynthetic apparatus in Arabidopsis. The Plant Cell, 21(4), 1109–1128.](http://doi.org/10.1105/tpc.108.065250)   

@@ -1,0 +1,383 @@
+---
+title: "ChIP-seq and ATAC-seq overlap"
+output: html_notebook
+editor_options: 
+  chunk_output_type: inline
+---
+Here we present a large collection of non-coding functional elements in the maize genome that includes accessible chromatin regions, and to the best of our knowledge, the largest inventory for in-vivo transcription factors (TF) binding profiles in plants (Fig 1A).
+
+```{r, echo=FALSE}
+pacman::p_load('dplyr', 'tidyr', 'gapminder',
+               'ggplot2',  'ggalt',
+               'forcats', 'R.utils', 'png', 
+               'grid', 'ggpubr', 'scales',
+               'bbplot')
+```
+
+```{r, echo=FALSE}
+# Load
+library(regioneR) #be sure to have it for the ATAC-seq ChIP-seq overlap
+library(GenomicRanges)
+```
+
+```{r, echo=FALSE}
+#Helper functions
+'%ni%' <- Negate('%in%')
+
+getmode <- function(v) {
+   uniqv <- unique(v)
+   uniqv[which.max(tabulate(match(v, uniqv)))]
+}
+```
+
+### Figure 1A
+#![Here is figure 1A](/Users/mm2842/p_transcriptionfactors/Figures/R_notebooks/png_files/Figure1A_cartoon.png)
+```{r, echo=FALSE}
+#cartoon summarizing the paper - visual abstract
+```
+
+To map TF binding in a native chromatin context, we developed a modified ChIP-seq assay that eliminates the need for specific antibodies and reduces the amount of material required for library preparation, two major limitations for quality and scalable assays [1]. This allowed us to generate libraries for a large number of TFs (104 sequence specific TFs, from 25 TF families) expressed in leaves (B73, leaves of 9-day-old seedlings) (Supplementary table 1). To determine the quality of each library we evaluated the success of the immunoprecipitation step, following quality-control measures from the ENCODE and modENCODE consortia guidelines [1] (Supplementary table 2). Next, we selected experiments that showed reproducibility between biological replicates (Pearson correlation coefficient for aligned reads, r > 0.8) to proceed with peak calling (Supplementary figure 1). 
+
+```{r, echo=FALSE}
+#missing data and code from Xiaoyu Tu to recapitulate this figure
+#was in Xiaoyu Tu presentation for the Buckler lab
+```
+
+In brief, peaks were called with SPP [2], followed by the irreproducibility discovery rate (IDR) statistical framework (IDR < 1%) to determine sets of reproducible peaks between biological replicates [3]. The number of ChIP-seq peaks varies between TFs, with a median value of ~16K (Interquartile range, IQR~25-75~ 7,664-32,566 peaks), for a total of 2,147,346 peaks (Supplementary figure 2, Supplementary table 3). 
+
+Peaks from different TFs were clustered based on their summit positions resulting in 144,890 non-overlapping binding loci, corresponding to ~2% of the maize genome (Supplementary figure 2). 
+
+```{r, echo=FALSE}
+TF_binding_all_files <- "/Users/mm2842/Box/p_transcriptionfactors/Figures/Data/all_reproducible_peaks_sorted.bed"
+TF_binding_df <- read.delim(TF_binding_all_files, stringsAsFactors=FALSE, quote="", header=FALSE)
+colnames(TF_binding_df) <- c("chr","start","end","Zmtfid","score","strand")
+TF_count_peaks <- TF_binding_df %>% group_by(Zmtfid) %>% summarise(peaks=n())
+TF_count_peaks$cumulative <- cumsum(TF_count_peaks$peaks/sum(TF_count_peaks$peaks))
+#"#C93312" - redish color
+fontsize <- 12 #for notebook, use 25 for the figure
+ecdf_total_peaks <- ggplot(TF_count_peaks, aes(peaks)) + 
+  stat_ecdf(geom = "step", size=1, colour="darkgrey") +
+  geom_vline(aes(xintercept = unname(quantile(TF_count_peaks$peaks,0.25,na.rm=T))),col='black',size=1, alpha=0.4, linetype = "dotted") +
+  annotate("text", x = 120+unname(quantile(TF_count_peaks$peaks,0.25,na.rm=T)), y = 0.78, label = "a", size = 8) +
+  geom_vline(aes(xintercept = median(TF_count_peaks$peaks)),col='black',size=1, alpha=0.4, linetype = "dotted") +
+  annotate("text", x = 120+median(TF_count_peaks$peaks), y = 0.78, label = "b", size = 8) +
+  geom_vline(aes(xintercept = unname(quantile(TF_count_peaks$peaks,0.75,na.rm=T))),col='black',size=1, alpha=0.4, linetype = "dotted") +
+  annotate("text", x = 120+unname(quantile(TF_count_peaks$peaks,0.75,na.rm=T)), y = 0.78, label = "c", size = 8) +
+  scale_y_continuous(expand=c(0,0), labels = scales::percent) +
+  scale_x_continuous(expand=c(0,0), labels = comma)+
+  bbc_style() + 
+  labs(x="number of peaks",
+     y="Proportion of TFs") +
+  theme(axis.title = element_text(size = fontsize),
+        panel.border = element_blank(), 
+        panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank(), 
+        axis.line = element_line(colour = "black")) 
+
+#ecdf_total_peaks
+ggarrange(ecdf_total_peaks, labels = c("Supplementary figure 2"))
+```
+
+We also profiled chromatin accessibility in mesophyll cells (B73, leaves of 9-day-old seedlings) using ATAC-seq [4] (Supplementary table 4). Aligned reads from two biological replicates were well correlated (Pearson correlation coefficient, r = 0.89), and the data was consolidated into 38,713 open chromatin regions that correspond to ~1% of the maize genome, in agreement with previous observations from MNAse-seq data [5]. 
+
+Distribution of TF binding loci with respect to genes and open chromatin distribution are similar, with ~70% of the TF binding loci, and 67% of the open chromatin regions located in the gene proximal regions (+/- 2.5kb of gene), and preferentially towards the 5’ end of genes (Fig 1B). 
+
+```{r, echo=FALSE}
+genebody_group <- c("5' end of gene body\n +/- 2kb", "3' end of gene body\n +/- 2kb", "Intergenic\n >2kb from gene body")
+regions <- c("TF binding loci","Open chromatin regions")
+ATACseq_peaks2genebody <- data.frame(
+  group = genebody_group,
+  value = c(21230, 4752, 12731))
+ATACseq_peaks2genebody <- ATACseq_peaks2genebody %>% mutate(percentage = (value / sum(value)))
+ATACseq_peaks2genebody$region <- "Open chromatin regions"
+TF_binding_loci2genebody <- data.frame(
+  group = genebody_group,
+  value = c(73228, 27239, 44423))
+TF_binding_loci2genebody <- TF_binding_loci2genebody %>% mutate(percentage = (value / sum(value)))
+TF_binding_loci2genebody$region <- "TF binding loci"
+regions2genebody <- rbind(ATACseq_peaks2genebody, TF_binding_loci2genebody)
+regions2genebody$group <- factor(regions2genebody$group, levels = genebody_group)
+regions2genebody$region <- factor(regions2genebody$region, levels = regions)
+
+#"#ff9d9d" #pink-ish for TF binding loci
+#"#2589FF" #blue-ish for open chromatin regions
+fontsize <- 12
+fig1B <- ggplot(regions2genebody, 
+                       aes(x = group, 
+                           y = percentage, 
+                           fill = region)) +
+  geom_bar(stat="identity", position="dodge") +
+  scale_y_continuous(expand=c(0,0), limits = c(0, 0.60), labels = percent_format(accuracy = 1)) +
+  scale_fill_manual(values = c("grey","black")) + 
+  #scale_fill_manual(values = c("#ff9d9d","#2589FF")) + 
+  bbc_style() + 
+  labs(title="",
+       y ="Percentage", 
+       x = "") +
+  theme(legend.justification = c(1, 1), 
+        legend.position = c(1, 1),
+        legend.title = element_blank(),
+        legend.text =  element_text(face="bold"),
+        axis.title = element_text(size = fontsize, face="bold"),
+        axis.text.x = element_text(face="bold", size=fontsize),
+        axis.text.y = element_text(face="bold", size=fontsize),
+        panel.border = element_blank(), 
+        panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank(), 
+        axis.line = element_line(colour = "black"))
+
+ggarrange(fig1B, labels = c(""))
+
+TF_binding_loci2genebody$group <- stringr::str_wrap(TF_binding_loci2genebody$group, width = 12)
+TF_binding_pie <- ggplot(TF_binding_loci2genebody, aes(x="", y=value, fill=group)) +
+  geom_col( color = "black", position = 'fill') +
+  scale_fill_manual(values=c("#eea9b8","#ee1289", "#ffe1e1")) +
+  geom_label(aes(label = paste0(round(percentage*100), "%")),
+             position = position_fill(vjust = 0.5),
+             color = 'black',
+             size = 10,
+             show.legend = FALSE) +
+  coord_polar(theta = 'y') +
+  theme_minimal() + 
+  theme(legend.position = "right",
+        legend.title = element_blank(),
+        legend.text=element_text(size=12),
+        axis.title.x = element_blank(),
+        axis.title.y = element_blank(),
+        panel.border = element_blank(),
+        panel.grid=element_blank(),
+        axis.ticks = element_blank(),
+        axis.text.x=element_blank(),
+        plot.title=element_text(size=fontsize, face="bold"))
+  
+TF_binding_pie
+```
+
+Considering only regions that did not overlap with gene bodies, the distribution of the frequency of the distances between open regulatory regions to its closest gene appears to be bimodal (Fig 1C-D). TF bindings in proximal regions were abundant ~2kb from gene bodies, consistent with a role in regulation of gene expression, and distal regions located at a wide range of distances, with ~15% of the TF binding loci, and ~17% of the open chromatin regions in the range of 10-100kb away from gene bodies, consistent with known long-distance QTLs [6-7]. The proportion of proximal vs. distal regions did not appear to correspond to the available “space” between genes, as genic regions are spread out at larger distances providing more opportunity for distal regulation that the observed (Fig 1C-D). 
+
+### Figure 1C-D - Distribution regulatory regions that are non-overlapping with gene bodies, as a function of gene distance
+```{r, echo=FALSE}
+#Read file with distances between genes
+genes2genes_distance_file <- "/Users/mm2842/p_transcriptionfactors/Figures/Data/Zm_intergenic_sorted.txt"
+genes2genes_distance <- read.delim(genes2genes_distance_file, stringsAsFactors=FALSE, quote="", header=FALSE)
+colnames(genes2genes_distance) <- c("length_IRG")
+genes2genes_distance_plot <- genes2genes_distance %>% dplyr::filter(length_IRG > 0)
+
+#Read file with distances from overlapping TF binding loci to genes
+TF_binding_loci2genes_file <- "/Users/mm2842/p_transcriptionfactors/Figures/Data/TF_biding_loci_closest_gene_all.tsv"
+TF_binding2genes <- read.delim(TF_binding_loci2genes_file, stringsAsFactors=FALSE, quote="")
+TF_binding2genes$abs_distance <- abs(TF_binding2genes$distance)
+TF_binding2genes_avg_distance <- TF_binding2genes %>% group_by(peak_id) %>% summarise(avg_distance=mean(abs_distance))
+TF_binding2genes_plot <- TF_binding2genes_avg_distance %>% dplyr::filter(avg_distance > 0)
+
+#Read file with distances from overlapping ATAC-seq peaks to genes
+ATACseq_peaks2genes_file <- "/Users/mm2842/p_transcriptionfactors/Figures/Data/ATAC-seq_MC_open_regions_closest_gene_all.tsv"
+ATACseq_peaks2genes <- read.delim(ATACseq_peaks2genes_file, stringsAsFactors=FALSE, quote="")
+ATACseq_peaks2genes$abs_distance <- abs(ATACseq_peaks2genes$distance)
+ATACseq_peaks2genes_avg_distance <- ATACseq_peaks2genes %>% dplyr::group_by(peak_id) %>% dplyr::summarise(avg_distance=mean(abs_distance))
+ATACseq_peaks2genes_plot <- ATACseq_peaks2genes_avg_distance %>% dplyr::filter(avg_distance > 0)
+
+#"#ff9d9d" #pink-ish for TF binding loci
+fontsize = 12
+breaks=c(1,200,2000,20000,200000)
+fig1C <- ggplot() + 
+   geom_histogram(data = TF_binding2genes_plot, aes(x = avg_distance, y=..density..), bins = 150, fill = "grey") +  
+   geom_density(data = genes2genes_distance_plot, aes(x=length_IRG), size=3, linetype=1, colour="darkgrey") +
+   geom_vline(aes(xintercept = 2000),col='black',size=1, alpha=0.8, linetype = "longdash") +
+   geom_vline(aes(xintercept = 35000),col='black',size=1, alpha=0.8, linetype = "dotted") +
+   scale_x_continuous(expand=c(0,0), breaks = breaks, labels = comma, trans="log10") +
+   scale_y_continuous(expand=c(0,0)) +
+   bbc_style() + 
+   labs(title="",
+       y ="Density \nTF binding loci", 
+       x = "Distance to closest gene \nin basepairs (log10)") +
+   theme(axis.title = element_text(size = fontsize, face="bold"),
+        axis.text.x = element_text(face="bold", size=fontsize),
+        axis.text.y = element_text(face="bold", size=fontsize),
+        panel.border = element_blank(), 
+        panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank(), 
+        axis.line = element_line(colour = "black"))
+
+fig1C_SZ <- ggplot()+ 
+   geom_density(data = TF_binding2genes_plot, aes(x = avg_distance),  size=3, linetype=1, colour="#ff9d9d") +
+   geom_density(data = genes2genes_distance_plot, aes(x=length_IRG), size=3, linetype=1, colour="darkgrey") +
+   geom_density(data = ATACseq_peaks2genes_plot, aes(x = avg_distance),  size=3, linetype=1, colour="#2589FF") +
+   geom_vline(aes(xintercept = 2000),col='black',size=1, alpha=0.8, linetype = "longdash") +
+   geom_vline(aes(xintercept = 35000),col='black',size=1, alpha=0.8, linetype = "dotted") +
+   scale_x_continuous(expand=c(0,0), breaks = breaks, labels = comma, trans="log10") +
+   scale_y_continuous(expand=c(0,0)) +
+   bbc_style() + 
+   labs(title="",
+       y ="Density \nTF binding loci", 
+       x = "Distance to closest gene \nin basepairs (log10)") +
+   theme(axis.title = element_text(size = fontsize, face="bold"),
+        axis.text.x = element_text(face="bold", size=fontsize),
+        axis.text.y = element_text(face="bold", size=fontsize),
+        panel.border = element_blank(), 
+        panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank(), 
+        axis.line = element_line(colour = "black"))
+```
+
+```{r, echo=FALSE}
+ggarrange(fig1C_SZ, labels = c("1C"))
+```
+
+
+```{r, echo=FALSE}
+#Read file with distances between genes
+genes2genes_distance_file <- "/Users/mm2842/p_transcriptionfactors/Figures/Data/Zm_intergenic_sorted.txt"
+genes2genes_distance <- read.delim(genes2genes_distance_file, stringsAsFactors=FALSE, quote="", header=FALSE)
+colnames(genes2genes_distance) <- c("length_IRG")
+genes2genes_distance_plot <- genes2genes_distance %>% dplyr::filter(length_IRG > 0)
+
+#Read file with distances from overlapping peaks to genes
+ATACseq_peaks2genes_file <- "/Users/mm2842/p_transcriptionfactors/Figures/Data/ATAC-seq_MC_open_regions_closest_gene_all.tsv"
+ATACseq_peaks2genes <- read.delim(ATACseq_peaks2genes_file, stringsAsFactors=FALSE, quote="")
+ATACseq_peaks2genes$abs_distance <- abs(ATACseq_peaks2genes$distance)
+ATACseq_peaks2genes_avg_distance <- ATACseq_peaks2genes %>% dplyr::group_by(peak_id) %>% dplyr::summarise(avg_distance=mean(abs_distance))
+ATACseq_peaks2genes_plot <- ATACseq_peaks2genes_avg_distance %>% dplyr::filter(avg_distance > 0)
+#"#2589FF"
+#fontsize = 25
+fontsize = 12
+breaks=c(1,200,2000,20000,200000)
+fig1D <- ggplot() + 
+   geom_histogram(data = ATACseq_peaks2genes_plot, aes(x = avg_distance, y=..density..), bins = 150, fill = "black") + 
+   geom_density(data = genes2genes_distance_plot, aes(x=length_IRG), size=2,linetype=1, colour="darkgrey") +
+   geom_vline(aes(xintercept = 2000),col='darkgrey',size=1, alpha=0.8, linetype = "longdash") +
+   geom_vline(aes(xintercept = 35000),col='darkgrey',size=1, alpha=0.8, linetype = "dotted") +
+   scale_x_continuous(expand=c(0,0), breaks = breaks, labels = comma, trans="log10") +
+   scale_y_continuous(expand=c(0,0)) +
+   bbc_style() + 
+   labs(title="",
+       y ="Density \nopen chromatin regions", 
+       x = "Distance to closest gene \nin basepairs (log10)") +
+   theme(axis.title = element_text(size = fontsize, face="bold"),
+        axis.text.x = element_text(face="bold", size=fontsize),
+        axis.text.y = element_text(face="bold", size=fontsize),
+        panel.border = element_blank(), 
+        panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank(), 
+        axis.line = element_line(colour = "black"))
+
+ggarrange(fig1C, fig1D, labels = c("1C", "1D"))
+```
+
+Layering ATAC-seq and ChIP-seq data further confirmed that TF peaks and open chromatin overlap, with a non-random relationship (H0: 10000 sets of randomly positioned loci, P-value < 10-5) (Supplementary figure 3). 
+```{r echo=FALSE}
+#Supplementary figure 3
+#load("/Users/mm2842/p_transcriptionfactors/Figures/Data/empirical_null_10k.RData")
+
+mean_plus_two_sigma = mean(empirical_null_10k$numOverlaps)+2*(sd(empirical_null_10k$numOverlaps))
+fontsize=25
+ATACse_binding_loci_relation_plot <- ggplot(empirical_null_10k, aes(x=numOverlaps)) + 
+  geom_histogram(aes(y=..density..), bins = 150,  colour="lightgrey", fill="grey") + 
+  geom_vline(aes(xintercept =mean(empirical_null_10k$numOverlaps)), col="black", alpha=0.4, size=1.0, linetype="solid") +
+  geom_vline(aes(xintercept =mean_plus_two_sigma),col='black', alpha=0.4, size=1.0, linetype="dashed") +
+  geom_vline(aes(xintercept = 38287),col='black',size=1.0, linetype="dotted") +
+  geom_vline(aes(xintercept = 45000),col='white') +
+  scale_y_continuous(expand = c(0, 0)) +
+  scale_x_continuous(labels = scales::comma, expand = c(0, 0), trans="log10")+
+  bbc_style() + 
+  labs(y ="Density", 
+       x = "Count of regions overlapping \nto TF binding loci (log10)") +
+  theme(axis.title = element_text(size = fontsize, face="bold"),
+        axis.text.x = element_text(face="bold", size=fontsize),
+        axis.text.y = element_text(face="bold", size=fontsize),
+        panel.border = element_blank(), 
+        panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank(), 
+        axis.line = element_line(colour = "black"))
+
+#ATACse_binding_loci_relation_plot
+ggarrange(ATACse_binding_loci_relation_plot, labels = c("Supplementary figure 3"))
+```
+
+From the total set of TF peaks, 64% were overlapping with open chromatin regions, with a median value of 74% (IQR~25-75~ 64%-87%) of the total peaks for a given TF (Supplementary figure 4). 
+
+```{r, echo=FALSE}
+summary_tf_peaks_rel_ACRs <- "/Users/mm2842/p_transcriptionfactors/Figures/Data/count_TF_peaks_overlapping_ATAC-seq.tsv"
+df_tf_peaks_rel_ACRs <- read.delim(summary_tf_peaks_rel_ACRs, stringsAsFactors=FALSE, quote="", header=FALSE)
+colnames(df_tf_peaks_rel_ACRs) <- c("TF","in_ACR")
+
+grouped_TF_in_ACRs_df <- df_tf_peaks_rel_ACRs %>%
+                         dplyr::group_by(TF, in_ACR) %>% 
+                         summarise(total_loan_amount=n()) %>% 
+                         spread(in_ACR, total_loan_amount) %>% 
+                         ungroup()
+                         
+colnames(grouped_TF_in_ACRs_df) <-  c("TF","no_overlap_ACR","overlap_ACR")
+grouped_TF_in_ACRs_df$total <- grouped_TF_in_ACRs_df$overlap_ACR + grouped_TF_in_ACRs_df$no_overlap_ACR
+grouped_TF_in_ACRs_df$rel.freq <- grouped_TF_in_ACRs_df$overlap_ACR / grouped_TF_in_ACRs_df$total
+
+#Make plot
+fontsize = 15
+bp1 <- ggplot(grouped_TF_in_ACRs_df, aes(x="", y=rel.freq)) + 
+  geom_boxplot() +
+  scale_y_continuous(limits = c(0.05,0.96),labels = scales::percent_format(accuracy = 1)) +
+  bbc_style() + 
+  labs(title="",
+       y ="Proportion TF peaks overlapping \nwith open chromatin regions", 
+       x = "") +
+  theme(axis.title = element_text(size = fontsize, face="bold"),
+        axis.text.x = element_text(face="bold", size=fontsize),
+        axis.text.y = element_text(face="bold", size=fontsize),
+        panel.border = element_blank(), 
+        panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank(), 
+        axis.line = element_line(colour = "black"))
+
+#bp1
+ggarrange(bp1, labels = c("Supplementary figure 4"))
+```
+
+For open chromatin regions, 98% overlap with at least one TF (mode=5, median=19 distinct TFs) for each region (Fig 1E), and 95% overlap with TFs from at least two distinct families (median=10) for each region. The large number of distinct TFs clustered within TF binding loci - often from diverse TF families – that co-localize with open chromatin regions suggests a large number of possible TF combinations. The similarity between TF binding profiles and open chromatin confirm the reliability of the ChIP-seq data, and the relevance of the identified binding sites within the in-vivo chromatin context. 
+
+### Distribution of open chromatin regions non-overlapping with gene bodies, as a function of gene distance
+```{r, echo=FALSE}
+TF_occupancy_ATAC_seq_MC <- read.delim("/Users/mm2842/p_transcriptionfactors/Figures/Data/TF_summits_occupancy_ATAC_seq_MC_MM2019_filter_unbound.tsv", quote="", stringsAsFactors=FALSE)
+colnames(TF_occupancy_ATAC_seq_MC) <- c("ACR","tfid")
+ACRs_TF_count <- TF_occupancy_ATAC_seq_MC %>% group_by(ACR) %>% summarise(unique_TFs = n_distinct(tfid))
+ACRs_TF_count$cumulative <- cumsum(ACRs_TF_count$unique_TFs/sum(ACRs_TF_count$unique_TFs))
+
+binwidth = 1
+#fontsize = 25
+#fontsize = 12
+histogram_ACRs_TF <- ggplot(ACRs_TF_count, aes(x = unique_TFs, 
+                          mean = mean(ACRs_TF_count$unique_TFs), 
+                          sd = sd(ACRs_TF_count$unique_TFs), 
+                          binwidth = binwidth, 
+                          n = length(ACRs_TF_count$unique_TFs))) +
+  geom_histogram(binwidth = binwidth, 
+                 colour = "white", fill = "#2589FF", size = 0.1) +
+  geom_vline(aes(xintercept = 5),col='black', alpha=0.6, size=1, linetype="dashed") +
+  geom_vline(aes(xintercept = median(ACRs_TF_count$unique_TFs)),col="black", alpha=0.6, size=1, linetype="dotted") +
+  scale_y_continuous(expand=c(0,0), labels = scales::comma) +
+  scale_x_continuous(expand=c(0,0)) +
+  bbc_style() + 
+  labs(y ="Count of \nopen chromatin regions", 
+       x = "Count of distinct overlapping TFs") +
+  theme(axis.title = element_text(size = fontsize, face="bold"),
+        axis.text.x = element_text(face="bold", size=fontsize),
+        axis.text.y = element_text(face="bold", size=fontsize),
+        panel.border = element_blank(), 
+        panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank(), 
+        axis.line = element_line(colour = "black"))
+
+#histogram_ACRs_TF
+ggarrange(histogram_ACRs_TF, labels = c("1E"))
+```
+
+
+```{r, echo=FALSE}
+sessionInfo()
+```
+[1. Landt, S. G., Marinov, G. K., Kundaje, A., Kheradpour, P., Pauli, F., Batzoglou, S., et al. (2012). ChIP-seq guidelines and practices of the ENCODE and modENCODE consortia. Genome Research, 22(9), 1813–1831.](http://doi.org/10.1101/gr.136184.111)  
+[2. Kharchenko, P. V., Tolstorukov, M. Y., & Park, P. J. (2008). Design and analysis of ChIP-seq experiments for DNA-binding proteins. Nature Biotechnology, 26(12), 1351–1359.](http://doi.org/10.1038/nbt.1508)  
+[3. Li, Q., Brown, J. B., Huang, H., & Bickel, P. J. (2011). Measuring reproducibility of high-throughput experiments. The Annals of Applied Statistics, 5(3), 1752–1779.](http://doi.org/10.1214/11-AOAS466)  
+[4. Buenrostro, J. D., Giresi, P. G., Zaba, L. C., Chang, H. Y., & Greenleaf, W. J. (2013). Transposition of native chromatin for fast and sensitive epigenomic profiling of open chromatin, DNA-binding proteins and nucleosome position. Nature Methods, 10(12), 1213–1218.](http://doi.org/10.1038/nmeth.2688)  
+[5. Rodgers-Melnick, E., Vera, D. L., Bass, H. W., & Buckler, E. S. (2016). Open chromatin reveals the functional maize genome. Proceedings of the National Academy of Sciences of the United States of America, 113(22), E3177–84.](http://doi.org/10.1073/pnas.1525244113)  
+[6. Salvi, S., Sponza, G., Morgante, M., Tomes, D., Niu, X., Fengler, K. A., et al. (2007). Conserved noncoding genomic sequences associated with a flowering-time quantitative trait locus in maize. Proceedings of the National Academy of Sciences, 104(27), 11376–11381.](http://doi.org/10.1073/pnas.0704145104)    
+[7. Lemmon, Z. H., Bukowski, R., Sun, Q., & Doebley, J. F. (2014). The role of cis regulatory evolution in maize domestication. PLoS Genetics, 10(11), e1004745.](http://doi.org/10.1371/journal.pgen.1004745)  

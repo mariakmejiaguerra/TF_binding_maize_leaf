@@ -1,0 +1,495 @@
+---
+title: "Overlap with functional variation"
+output: html_notebook
+editor_options: 
+  chunk_output_type: inline
+---
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+pacman::p_load('dplyr', 'tidyr', 'gapminder',
+               'ggplot2',  'ggalt',
+               'forcats', 'R.utils', 'png', 
+               'grid', 'ggpubr', 'scales',
+               'bbplot','stringr')
+```
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+library(RColorBrewer)
+library(fastcluster) # fast hclust
+library(gplots) # heatmap2
+library(fBasics) # color scales
+library(cba) # adds optimal ordering functionality
+library(reshape)
+library(GenomicRanges)
+library(qqman)
+library(ggplotify)
+```
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+#Helper functions
+'%ni%' <- Negate('%in%')
+
+getmode <- function(v) {
+   uniqv <- unique(v)
+   uniqv[which.max(tabulate(match(v, uniqv)))]
+}
+```
+
+```{r, echo=FALSE}
+#' gemma GWAS results (lmm 2) to GRanges
+#' This function loads a gemma result file and stores it as a GRanges object.
+gwas_gemma_to_granges <- function(gwas_df){
+   #expected dataframe with the following values
+   #chr	rs	ps	n_miss	allele1	allele0	af	logl_H1	l_mle	p_lrt p_fdr
+   df <- gwas_df %>% dplyr::filter(p_fdr <= 0.05) %>% mutate(start=ps-1) %>% select(chr,start,ps,rs)
+   colnames(df) <- c('chr','start','end','id')
+ 
+   if(length(df) > 6){
+      df <- df[,-c(7:length(df))]
+   }
+ 
+   if(length(df)<3){
+      stop("File has less than 3 columns")
+   }
+ 
+   header <- c('chr','start','end','id','score','strand')
+   names(df) <- header[1:length(names(df))]
+ 
+   if('strand' %in% colnames(df)){
+      df$strand <- gsub(pattern="[^+-]+", replacement = '*', x = df$strand)
+   }
+ 
+   if(length(df)==3){
+      gr <- with(df, GRanges(chr, IRanges(start, end)))
+   } else if (length(df)==4){
+      gr <- with(df, GRanges(chr, IRanges(start, end), id=id))
+   } else if (length(df)==5){
+      gr <- with(df, GRanges(chr, IRanges(start, end), id=id, score=score))
+   } else if (length(df)==6){
+      gr <- with(df, GRanges(chr, IRanges(start, end), id=id, score=score, strand=strand))
+   }
+   return(gr)
+}
+
+peakbeds_to_granges <- function(peaks_df, tf_id){
+   #expected dataframe with the following values
+   #'chr','start','end','id','binding_signal','strand'
+   colnames(peaks_df) <- c('chr','start','end','id','binding_signal','strand')
+   df = peaks_df %>% dplyr::filter(id == tf_id) %>% select('chr','start','end')
+ 
+   if(length(df) > 6){
+      df <- df[,-c(7:length(df))]
+   }
+ 
+   if(length(df)<3){
+      stop("File has less than 3 columns")
+   }
+ 
+   header <- c('chr','start','end','id','score','strand')
+   names(df) <- header[1:length(names(df))]
+ 
+   if('strand' %in% colnames(df)){
+      df$strand <- gsub(pattern="[^+-]+", replacement = '*', x = df$strand)
+   }
+ 
+   if(length(df)==3){
+      gr <- with(df, GRanges(chr, IRanges(start, end)))
+   } else if (length(df)==4){
+      gr <- with(df, GRanges(chr, IRanges(start, end), id=id))
+   } else if (length(df)==5){
+      gr <- with(df, GRanges(chr, IRanges(start, end), id=id, score=score))
+   } else if (length(df)==6){
+      gr <- with(df, GRanges(chr, IRanges(start, end), id=id, score=score, strand=strand))
+   }
+   return(gr)
+}
+
+
+plot_overlap_TF_phenotype <- function(phenoidx, tf_id) {
+  gwas_df <- read.delim(paste0("~/Documents/p_maize_TFs/GWAS/",phenoidx,"_gwas_nam.tsv"),
+                        quote="", stringsAsFactors=FALSE, header=TRUE)
+  gwas_df$p_fdr <- p.adjust(gwas_df$p_lrt, method = "BH", n = nrow(gwas_df))
+  
+  #Read the peask file
+  all_peaks <- read.delim("/Users/mm2842/Documents/p_maize_TFs/IDR_001_freeze/IDR_001/all_reproducible_peaks_sorted.bed", quote="", stringsAsFactors=FALSE, header=TRUE)
+  #Get ranges of peaks for a TF
+  peaks_df <- peakbeds_to_granges(all_peaks, tf_id)
+  
+  #Get ranges of significant SNPs
+  significant_snps <- gwas_gemma_to_granges(gwas_df)
+  rg_intersect = subsetByOverlaps(significant_snps, peaks_df)
+  highlight_markers = intersect(gwas_df$rs,rg_intersect$id)
+  
+  # Make the Manhattan plot on the gwasResults dataset, pretty 
+  don <- gwas_df %>% 
+    group_by(chr) %>% 
+    summarise(chr_len=max(ps)) %>% 
+    mutate(tot=cumsum(chr_len)-chr_len) %>%
+    select(-chr_len) %>%
+    left_join(gwas_df, ., by=c("chr"="chr")) %>%
+    arrange(chr, ps) %>%
+    mutate(BPcum=ps+tot) %>%
+    mutate(is_highlight=ifelse(rs %in% highlight_markers, "yes", "no")) %>%
+    dplyr::filter(-log10(p_lrt)>1.0)
+  
+  id_table <- read.delim("~/Documents/p_maize_TFs/id_table.tsv", quote="", stringsAsFactors=FALSE)
+  tf_name <- id_table[id_table$Zmtfid == tf_id,]$tf_name
+  
+  png(paste0("~/Desktop/Manhattan_",phenoidx,"_",tf_name,".png"), width=2000, height=1000, pointsize=18)
+  # Make the Manhattan plot on the gwasResults dataset, easy 
+  manhattan(don, chr="chr", bp="ps", snp="rs", p="p_lrt", 
+            genomewideline=FALSE, 
+            suggestiveline=FALSE,
+            highlight=highlight_markers, 
+            col= c("grey28","grey61"), 
+            main = paste0(phenoidx," GWAS hits overlapping to ",
+                          tf_name," peaks"))
+  dev.off()
+}
+```
+TF binding sites are key determinants of transcriptional regulation, and should harbor low sequence diversity, as well as to preferentially overlap with functional variation. We examined the conservation of the TF binding regions by assessing the overall nucleotide diversity represented in the maize HapMap [1] while controlling for the overall SNP density in function to the distance of TF’s peak summit (Fig 2A). The result confirmed that sequence variation is indeed reduced, with variation decreasing in proximity of TF’s peak summit.
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+#load("/Users/mm2842/p_transcriptionfactors/Figures/Data/snpDensity_andBinCountData.RData")
+zLim = 1000
+Fig2A <- ggplot(subset(snpDensityDistToSummitFull_summ, DistToSummit >= -zLim & DistToSummit <= zLim)) +
+  geom_line(aes(DistToSummit, meanSnpDen)) + geom_line(aes(DistToSummit, meanSnpDen), col= "red", data = subset(snpDensityDistToSummitFull_summ_windowed, DistToSummit >= -zLim & DistToSummit <= zLim))  + 
+  bbc_style() + 
+  labs(title="",
+       y ="Mean SNP Density", 
+       x = stringr::str_wrap("Distance to TF binding summit in base pairs", width = 28)) +
+  theme(axis.title = element_text(size = fontsize, face="bold"),
+        axis.text.x = element_text(face="bold", size=fontsize),
+        axis.text.y = element_text(face="bold", size=fontsize),
+        panel.border = element_blank(), 
+        panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank(), 
+        axis.line = element_line(colour = "black"))
+ggarrange(Fig2A, labels = c("2A"))
+```
+
+
+To test the global relationship between the sequence variation associated with variation in gene expression and TF binding, we calculated the statistically significance of the overlap of cis-expression QTLs [2] (hereafter eQTLs) within 2 kb of TF binding loci from the non-eQTLs SNPs (Fisher test, P-value < 0.05). Next, we quantified the enrichment of eQTLs around TF binding loci and compared with adjacent regions at least 5 kb away from the nearest TF binding loci.
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+#Fig 2B - eqtl enrichment
+#Test for over-representation (enrichment)
+population_size <- 33368753
+population_hits <- 30915
+population_failure <- 33337838
+sample_hits <- 20361
+sample_size <- 12257647
+
+#phyper(sample_hits-1,
+#       population_hits,
+#       population_failure,
+#       sample_size,
+#       lower.tail= FALSE);
+
+#fisher.test(matrix(c(sample_hits, population_hits-sample_hits, sample_size-sample_hits, population_failure-sample_size +sample_hits), 2, 2), alternative='greater')$p.value;
+
+```
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+
+peaks_tf_enrichment <- read.delim("/Users/mm2842/p_transcriptionfactors/Figures/Data/peaks_tf_enrichment.tsv", quote="", stringsAsFactors=FALSE)
+
+#Prepare data
+dumbbell_df <- peaks_tf_enrichment %>%
+               dplyr::mutate(gap = y_end - y_start) %>%
+               dplyr::arrange(desc(y_start))
+
+key_regions_dumbbell_df <- dumbbell_df %>% dplyr::filter(TF %in% c("exons", "threeUTR","fiveUTR", "Introns","TF_binding_loci"))
+
+fontsize = 14
+Fig2B <- ggplot(key_regions_dumbbell_df, aes(x = y_start, xend = y_end, y = reorder(TF, y_midpoint), group = TF)) + 
+  geom_dumbbell(colour = "darkgrey",
+                size = 3,
+                colour_x = "black",
+                colour_xend = "black") +
+  geom_vline(aes(xintercept = 0),col='white',size=0.1) +
+  scale_y_discrete(labels = c("Introns","5'UTRs","TF binding\nloci","3'UTRs","Exons")) + 
+  bbc_style() + 
+  labs(title="",
+       y ="", 
+       x = "eQTLs - Fold enrichment\n95% credible confidence interval") +
+  theme(axis.title = element_text(size = fontsize, face="bold"),
+        axis.text.x = element_text(face="bold", size=fontsize),
+        axis.text.y = element_text(face="bold", size=fontsize),
+        panel.border = element_blank(), 
+        panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank(), 
+        axis.line = element_line(colour = "black"))
+ggarrange(Fig2B, labels = c("2B"))
+```
+
+We found twofold enrichment of eQTLs around TF binding loci (95% credible interval 2.26-2.46), similar to the enrichment around 5'UTRs (95% credible interval 1.80-2.11) and 3'UTRs (95% credible interval 2.37-2.73) (Fig 2B). Furthermore, the enrichment over control regions was robust to the distance between TF binding loci and genes (Supplementary figure 5).  
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+#insert here the supplemetary figure generated with python code
+```
+### Supplementary figure 5
+#![Here is Supplementary figure 1](/Users/mm2842/p_transcriptionfactors/Figures/R_notebooks/png_files/Supplementary_notebook_2_eqtls.png)
+At the level of individual TFs, we confirmed the trend observed for the whole set, with TFs enriched more than intronic regions and similar to the observed enrichment in 5’UTRs (Supplementary figure 2, supplementary table X). 
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+## eqtl enrichment - histogram
+allregions_dumbbell_df <- dumbbell_df %>% dplyr::filter(TF %ni% c("exons", "threeUTR","fiveUTR", "Introns","TF_binding_loci"))
+
+tfs_eqtl <- ggplot(allregions_dumbbell_df, aes(x = y_midpoint)) +
+  geom_histogram(bins=30, colour = "white", fill = "grey", size = 0.1) +
+  geom_vline(aes(xintercept = 0),col='white',size=0.1) +
+  geom_vline(aes(xintercept = 2.6),col='white',size=0.1) +
+  geom_vline(aes(xintercept = 1.724808),col='black', size=2, alpha=0.4, linetype = "solid") +
+  geom_vline(aes(xintercept = 1.102698),col='red', size=2, alpha=0.4, linetype = "dotted") +
+  geom_vline(aes(xintercept = 1.951602),col='blue', size=2, alpha=0.4, linetype = "dashed") +
+  scale_y_continuous(expand=c(0,0)) +
+  scale_x_continuous(expand=c(0,0))+
+  bbc_style() + 
+  labs(title="",
+       y ="count of TFs", 
+       x = "Fold enrichment\nmidpoint of the 95% credible confidence interval") +
+  theme(axis.title = element_text(size = fontsize, face="bold"),
+        axis.text.x = element_text(face="bold", size=fontsize),
+        axis.text.y = element_text(face="bold", size=fontsize),
+        panel.border = element_blank(), 
+        panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank(), 
+        axis.line = element_line(colour = "black"))
+
+annotate_figure(ggarrange(tfs_eqtl, labels = c("")),
+               top = text_grob("Supplementary figure 6", color = "black", face = "bold", size = 14)
+)
+```
+
+To assess the relationship between TF binding and complex trait variation, we calculated enrichment in GWAS hits for seven traits (metabolites [3], leaf architecture [4], and photoperiodicity [5]) measured in the US NAM population. We found statistical significance for the enrichment in GWAS-hits for four of the traits, including leaf angle and leaf width (Fig 2C).
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+#Fig 2C TF sites show GWAS enrichment
+library(reshape)
+binding_loci_gwas_enrichment <- read.delim("/Users/mm2842/p_transcriptionfactors/Figures/Data/binding_loci_enrichment_results_all_regions.csv", quote="", stringsAsFactors=FALSE)
+binding_loci_gwas_enrichment$p_val <- -1 * log10(binding_loci_gwas_enrichment$p.value)
+binding_loci_gwas_enrichment$prop_hits <- binding_loci_gwas_enrichment$Sample_hits/binding_loci_gwas_enrichment$Population_hits
+binding_loci_gwas_enrichment$prop_snps <- binding_loci_gwas_enrichment$Sample_size/binding_loci_gwas_enrichment$Population_size
+threshold <- -1*log10(0.05/7) # threshold for statistical significance, corrected to take into consideration the multiple hypothesis testing (7 regions)
+
+#Include the Ns to know how many GWAS hits per phenotype
+binding_loci_gwas_enrichment$Trait <- factor(binding_loci_gwas_enrichment$Trait, levels = binding_loci_gwas_enrichment$Trait[order(binding_loci_gwas_enrichment$prop_hits)])
+
+fontsize = 14
+
+Fig2C <- ggplot(binding_loci_gwas_enrichment, aes(y = prop_hits, x = Trait, fill = Category)) + 
+  geom_bar( stat="identity") +
+  scale_x_discrete(labels = function(x) stringr::str_wrap(x, width = 10)) + 
+  scale_y_continuous(expand=c(0,0), labels = scales::percent_format(accuracy = 5L)) +
+  geom_text(aes(y = prop_hits+0.015, label=ifelse(binding_loci_gwas_enrichment$p_val>threshold,"*","")), vjust=0.5, data = binding_loci_gwas_enrichment, size=10) +
+  geom_hline(aes(yintercept =  1),col='white',size=2, alpha=0.4, linetype = "dotted") +
+  facet_grid(Category ~ ., scales='free') +
+  bbc_style() + 
+  coord_flip() +
+  labs(title="",
+       y ="Percentage of GWAS-hits \naround TF binding loci", 
+       x = "Traits") +
+   theme(legend.position="top",
+         axis.title = element_text(size = fontsize, face="bold"),
+        axis.text.x = element_text(hjust = 1, face="bold", size=fontsize-2, angle=0),
+        axis.text.y = element_text(face="bold", size=fontsize-2),
+        panel.border = element_blank(), 
+        panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank(), 
+        axis.line = element_line(colour = "black"),
+        strip.text.y = element_text(color = "white"))
+ggarrange(Fig2C, labels = c("2C"))
+``` 
+The analyses of individual TFs in comparison to nearby regions, revealed that a large number of TFs overlap with GWAS hits for those traits that are expected to be influenced by a large number of regulators (complex traits) (e.g., DAS and DAT). More simple traits, such as metabolites, show few TFs enriched for GWAS hits, as those are expected to be under the control of few regulators (e.g., Malate, Nitrate) (Supplementary figure 3).
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+## GWAS enrichment histograms for each phenotype
+phenotypes = c("LeafAngle","LeafWidth","DAS","DAT","Fructose","Malate","Nitrate")
+results_gwas_enrichment <- read.delim("/Users/mm2842/Documents/p_maize_TFs/GWAS/GWAS_enrichment_all_phenotypes.tsv", quote="", stringsAsFactors=FALSE, header=FALSE)
+colnames(results_gwas_enrichment) <- c("pheno","tf","y_midpoint","ylow","yend")
+results_gwas_enrichment$gap <- results_gwas_enrichment$yend -  results_gwas_enrichment$ylow
+tf_gwas_CI95_dumbell <- results_gwas_enrichment %>% dplyr::filter(pheno %in% phenotypes) %>% dplyr::filter(tf %ni% "introns")
+
+tf_gwas_CI95_dumbell$category <- ifelse(tf_gwas_CI95_dumbell$pheno %in% c("DAS","DAT"), "Photoperiod",
+                                        ifelse(tf_gwas_CI95_dumbell$pheno %in% c("LeafAngle","LeafWidth"), "Leaf traits", "Metabolites"))
+
+phenotype_names <- list(
+  'LeafAngle'="Leaf angle",
+  'LeafWidth'="Leaf width",
+  'DAT'="DAT",
+  'DAS'="DAS",
+  'Fructose'="Fructose",
+  'Malate'="Malate",
+  'Nitrate'="Nitrate")
+
+pheno_labeller <- function(variable,value){
+  return(phenotype_names[value])
+}
+
+fontsize = 14
+facetfont = 10
+gwas_leaf_traits <- tf_gwas_CI95_dumbell %>% dplyr::filter(category %in%  "Leaf traits") %>% ggplot(aes(x = y_midpoint)) +
+  geom_histogram(bins=30, colour = "white", fill = "grey", size = 0.1) +
+  facet_grid(pheno ~ ., scales="free_x", labeller=pheno_labeller) +
+  geom_vline(aes(xintercept = 0),col='white',size=0.1) +
+  scale_y_continuous(expand=c(0,0)) +
+  scale_x_continuous(expand=c(0,0)) +
+  bbc_style() + 
+  labs(title="",
+       y ="count of TFs", 
+       x = "Fold enrichment\nmidpoint of the 95% credible confidence interval") +
+  theme(axis.title = element_text(size = fontsize, face="bold"),
+        axis.text.x = element_text(face="bold", size=fontsize),
+        axis.text.y = element_text(face="bold", size=fontsize),
+        strip.text.y = element_text(size = facetfont),
+        panel.spacing = unit(2, "lines"),
+        panel.border = element_blank(), 
+        panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank(), 
+        axis.line = element_line(colour = "black"))
+
+gwas_metabolites <- tf_gwas_CI95_dumbell %>% dplyr::filter(category %in% "Metabolites") %>% ggplot(aes(x = y_midpoint)) +
+  geom_histogram(bins=30, colour = "white", fill = "grey", size = 0.1) +
+  facet_grid(pheno ~ ., scales="free_x", labeller=pheno_labeller) +
+  geom_vline(aes(xintercept = 0),col='white',size=0.1) +
+  scale_y_continuous(expand=c(0,0)) +
+  scale_x_continuous(expand=c(0,0)) +
+  bbc_style() + 
+  labs(title="",
+       y ="count of TFs", 
+       x = "Fold enrichment\nmidpoint of the 95% credible confidence interval") +
+  theme(axis.title = element_text(size = fontsize, face="bold"),
+        axis.text.x = element_text(face="bold", size=fontsize),
+        axis.text.y = element_text(face="bold", size=fontsize),
+        strip.text.y = element_text(size = facetfont),
+        panel.border = element_blank(), 
+        panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank(), 
+        axis.line = element_line(colour = "black"))
+
+gwas_photoperiod <- tf_gwas_CI95_dumbell %>% dplyr::filter(category %in% "Photoperiod") %>% ggplot(aes(x = y_midpoint)) +
+  geom_histogram(bins=30, colour = "white", fill = "grey", size = 0.1) +
+  facet_grid(pheno ~ ., scales="free_x", labeller=pheno_labeller) +
+  geom_vline(aes(xintercept = 0),col='white',size=0.1) +
+  scale_y_continuous(expand=c(0,0)) +
+  scale_x_continuous(expand=c(0,0)) +
+  bbc_style() + 
+  labs(title="",
+       y ="count of TFs", 
+       x = "Fold enrichment\nmidpoint of the 95% credible confidence interval") +
+  theme(axis.title = element_text(size = fontsize, face="bold"),
+        axis.text.x = element_text(face="bold", size=fontsize),
+        axis.text.y = element_text(face="bold", size=fontsize),
+        strip.text.y = element_text(size = facetfont),
+        panel.border = element_blank(), 
+        panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank(), 
+        axis.line = element_line(colour = "black"))
+```
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+annotate_figure(ggarrange(gwas_leaf_traits, labels = c("A")),
+               top = text_grob("Supplementary figure 7", color = "black", face = "bold", size = 14)
+)
+```
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+ggarrange(gwas_metabolites, labels = c("B"))
+```
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+ggarrange(gwas_photoperiod,  labels = c("C"))
+```
+Examination of the TFs enriched in GWAS hits for days after anthesis (DAT), and days after silking (DAS) revealed that 51% of the TFs enriched in DAT, and 35% in DAS had binding sites in near proximity to VGT1, a major quantitative trait loci for flowering time, located at a distance of ~72 kb from the TSS of the RELATED TO AP2.7 (RAP2.7) gene [6] (Fig 1A). From the group of TFs binding around VGT1 and/or enriched for variants associated to photoperiod, a group of six(PRR5, ELF3, COL3, COL8, COL18 and DOF3/PBF1) have been previously associated with flowering time variations [7-8] (Fig 2D).
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+#For a group of regulators to collect variants that overlap with peaks without having to subset the data in advance
+flowering_time_reg <- c("ZmTF202","ZmTF170","ZmTF103","ZmTF161","ZmTF89","ZmTF91")
+#Read the peask file
+all_peaks <- read.delim("/Users/mm2842/Documents/p_maize_TFs/IDR_001_freeze/IDR_001/all_reproducible_peaks_sorted.bed", quote="", stringsAsFactors=FALSE, header=TRUE)
+
+for (phenoidx in c("DAT")) {
+  gwas_df <- read.delim(paste0("~/Documents/p_maize_TFs/GWAS/",phenoidx,"_gwas_nam.tsv"),
+                        quote="", stringsAsFactors=FALSE, header=TRUE)
+  gwas_df$p_fdr <- p.adjust(gwas_df$p_lrt, method = "BH", n = nrow(gwas_df))
+  #Get ranges of significant SNPs
+  significant_snps <- gwas_gemma_to_granges(gwas_df)
+  for (tf_id in flowering_time_reg) {
+    #Get ranges of peaks for a TF and regulatory_significant_snps
+    peaks_df <- peakbeds_to_granges(all_peaks, tf_id)
+    print(tf_id)
+    if (!exists("highlight_markers")){
+      rg_intersect = subsetByOverlaps(significant_snps, peaks_df)
+      print(length(rg_intersect$id))
+      highlight_markers = intersect(gwas_df$rs,rg_intersect$id)
+      rm(peaks_df, rg_intersect)
+    } else {
+      rg_intersect = subsetByOverlaps(significant_snps, peaks_df)
+      print(length(rg_intersect$id))
+      tmp_markers = intersect(gwas_df$rs,rg_intersect$id)
+      highlight_markers = c(highlight_markers, tmp_markers)
+      rm(tmp_markers)
+      rm(peaks_df, rg_intersect)
+    }
+  }
+  
+  highlight_markers = unique(highlight_markers)
+}
+
+
+```
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+#manhattan(don, chr="chr", bp="ps", snp="rs", p="p_lrt", 
+#          genomewideline=FALSE, 
+#          suggestiveline=FALSE,
+#          highlight=highlight_markers, 
+#          col= c("grey28","grey61"), 
+#          main = "2D")
+```
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+## GWAS enrichment - manhattan plot highlights regulatory marker
+# Prepare X axis
+axisdf <- don %>% group_by(chr) %>% summarize(chrom_len=as.numeric(max(BPcum)) + as.numeric(min(BPcum)))
+axisdf$center <- axisdf$chrom_len/2 
+don$is_highlight <- ifelse(don$rs %in% highlight_markers, 1, 0)
+
+fontsize = 14
+Fig2D <- ggplot(don, aes(x=BPcum, y=-log10(p_lrt))) +
+    # Show all points
+    geom_point( aes(color=as.factor(chr)), alpha=0.8, size=1.3) +
+    scale_color_manual(values = rep(c("grey28","grey61"), 10 )) +
+    # custom X axis:
+    scale_x_continuous(label = axisdf$chr, breaks= axisdf$center ) +
+    scale_y_continuous(expand = c(0, 0) ) + # remove space between plot area and x axis
+    geom_point(data=subset(don, is_highlight==1), color="green4", size=2) +
+  bbc_style() + 
+  labs(title="",
+       y =expression('-log'[10]*'(P-value)'), 
+       x = "Chromosome") +
+  theme_bw() +
+  theme(legend.position="none",
+        axis.title = element_text(size = fontsize, face="bold"),
+        axis.text.x = element_text(face="bold", size=fontsize),
+        axis.text.y = element_text(face="bold", size=fontsize),
+        strip.text.y = element_text(size = facetfont),
+        panel.border = element_blank(), 
+        panel.grid.major = element_blank(), 
+        panel.grid.major.x = element_blank(),
+        panel.grid.minor.x = element_blank(),
+        panel.grid.minor = element_blank(), 
+        axis.line = element_line(colour = "black"))
+```
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+ggsave(paste0("/Users/mm2842/p_transcriptionfactors/Figures/R_notebooks/png_files/Manhattan_",phenoidx,".png"), Fig2D)
+
+ggarrange(Fig2D,  labels = c("2D"))
+``` 
+Our observation indicates that TF binding regions are conserved, and their frequent overlap with cis-eQTLs and GWAS hits suggests that TF binding regions are functional portions of the maize genome. Taken together, our finding proves the potencial of our data to connect sequence variation in cis regulatory regions to trans-regulators, and to detect functional regulatory variants implicated in complex phenotypes.
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+sessionInfo()
+```
+[1. Bukowski, R., Guo, X., Lu, Y., Zou, C., He, B., Rong, Z., et al. (2018). Construction of the third-generation Zea mays haplotype map. GigaScience, 7(4), 1–12. ](http://doi.org/10.1093/gigascience/gix134)  
+[2. Kremling, K. A. G., Chen, S.-Y., Su, M.-H., Lepak, N. K., Romay, M. C., Swarts, K. L., et al. (2018). Dysregulation of expression correlates with rare-allele burden and fitness loss in maize. Nature, 555(7697), 520–523.](http://doi.org/10.1038/nature25966)  
+[3. Zhang, N., Gibon, Y., Wallace, J. G., Lepak, N., Li, P., Dedow, L., et al. (2015). Genome-wide association of carbon and nitrogen metabolism in the maize nested association mapping population. Plant Physiology, 168(2), 575–583. ](http://doi.org/10.1104/pp.15.00025)  
+[4. Tian, F., Bradbury, P. J., Brown, P. J., Hung, H., Sun, Q., Flint-Garcia, S., et al. (2011). Genome-wide association study of leaf architecture in the maize nested association mapping population. Nature Genetics, 43(2), 159–162.](http://doi.org/10.1038/ng.746)  
+[5. Buckler, E. S., Holland, J. B., Bradbury, P. J., Acharya, C. B., Brown, P. J., Browne, C., et al. (2009). The Genetic Architecture of Maize Flowering Time. Science, 325(5941), 714–718. ](http://doi.org/10.1126/science.1174276)  
+[6. Salvi, S., Sponza, G., Morgante, M., Tomes, D., Niu, X., Fengler, K. A., et al. (2007). Conserved noncoding genomic sequences associated with a flowering-time quantitative trait locus in maize. Proceedings of the National Academy of Sciences, 104(27), 11376–11381. ](http://doi.org/10.1073/pnas.0704145104)  
+[7. Li, Y.-X., Li, C., Bradbury, P. J., Liu, X., Lu, F., Romay, C. M., et al. (2016). Identification of genetic variants associated with maize flowering time using an extremely large multi-genetic background population. The Plant Journal : for Cell and Molecular Biology, 86(5), 391–402. ](http://doi.org/10.1111/tpj.13174)  
+[8. Alter, P., Bircheneder, S., Zhou, L.-Z., Schlüter, U., Gahrtz, M., Sonnewald, U., & Dresselhaus, T. (2016). Flowering Time-Regulated Genes in Maize Include the Transcription Factor ZmMADS1. Plant Physiology, 172(1), 389–404. ](http://doi.org/10.1104/pp.16.00285)

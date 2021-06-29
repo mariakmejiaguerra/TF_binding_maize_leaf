@@ -1,48 +1,25 @@
-# dockerR_template
+# README #
+This repository includes data and code to generate the figures
+for the paper "Decoding the regulatory architecture of the maize leaf"
 
-#### This repository host a template to launch a workstation with RStudio server:   
-* Folder for notebooks (R Notebooks) to report/develop analysis.   
-* Folder for data to host data, files in this folder are not sync to the git repository.  
-* Folder for code to host scripts to populate data folder.  
-* Container to reproduce workstation environment using [docker.](https://docs.docker.com/)  
+The R_notebook folder includes text in line with main and supplementary
+figures and the Data folder includes supplementary tables
 
-#### To start
-Clone the repository `git clone`, and populate the data folder
+### Systems view of gene regulation in the maize leaf ###
 
-##### General view of the repository:
-    |-- .gitignore
-    |-- LICENSE.md
-    |-- README.md
-    |-- docker-compose.yml
-    |-- code
-        |-- script-to-populate-data_dir.sh 
-    |-- data
-        |--.gitignore
-    |-- docker/
-        |--Dockerfile
-    |-- notebooks
-    
-    
-##### Launch Docker
+![picture](Figures/R_notebooks/png_files/Figure1A_cartoon.png)
 
-1. To use the docker images you first need to install Docker:  
+### Summary ###
+Integration of 104 ChIP-seq experiments highlights TF binding redundancy and modularity as key properties of the regulatory network
 
-* For Mac: https://docs.docker.com/docker-for-mac/  
-* For Windows: https://docs.docker.com/docker-for-windows/  
-* For Linux: https://docs.docker.com/engine/installation/  
+### Abstract ###
+* Transcription factors (TF) mediate the information flow from genotype to phenotype, yet cost effective in-vivo profiling of TF-DNA binding remained prohibitive. With a new scalable ChIP-seq approach, we annotated the regulatory landscape of the maize genome with binding data from 104 leaf expressed TFs   
+* TF binding regions co-localized with open chromatin regions, with 70% of TF binding within 2.5kb of genes, but distal binding over 20kb was frequently observed
+* Consistent with functional relevance, binding sites showed enrichment for GWAS-hits, cis-expression QTLs, and sequence conservation   
+* Furthermore, the regulatory network shows a “scale-free” topology and modularity larger than random graphs, as typical “real world” networks  
+* Finally, machine learning analyses found; redundancy in sequence recognition within families, often similar to Arabidopsis TF motifs, and TF binding co-localization as a key predictive feature of TF binding specificity  
+* The TF-DNA regions and models derived from maize provide a detailed view of how monocot and plant leaves are regulated
 
-2. Create a `.env_dev` file with development environment variables  
-  We want to keep passwords secret, so this file won't be in the repository and the .gitignore has been instructed to ignore it
-```
-# random seed for reproducible models
-random_seed=42
-
-#database password
-db_password=1234
-```
-3. Run `docker-compose build --no-cache`. This will build the development image with all the packages I defined installed within it.
-4. Run `docker-compose up` and navigate to your browser to find Rstudio running on [http://localhost:8787](http://localhost:8787). 
-5. Access it by entering user `rstudio` and the password `local_dev`.
-6. Once you are done, remember to shutdown the server and docker   
-  Go to the terminal and Press Ctrl+C   
-  `docker-compose down`
+### Who do I talk to? ###
+* Maria Katherine Mejia-Guerra (mm2842@cornell.edu)
+* Ed Buckler

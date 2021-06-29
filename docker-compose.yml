@@ -1,0 +1,28 @@
+version: "3.2"
+
+services:
+  rstudio:     
+    build: 
+      dockerfile: Dockerfile
+      context: ./docker
+    image: studiodocker
+    env_file:
+      - .env_dev
+    environment:
+      - PASSWORD=local_dev
+
+    ports:
+      - "8787:8787"
+    
+    entrypoint:
+      - /usr/lib/rstudio-server/bin/rserver
+      
+    command:
+      - --server-daemonize=0
+      - --server-app-armor-enabled=0
+    
+    volumes:
+      - ./data:/workdir/data
+      - ./code:/workdir/code
+      - ./notebooks:/workdir/notebooks
+

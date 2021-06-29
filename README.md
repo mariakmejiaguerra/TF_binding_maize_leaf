@@ -7,7 +7,7 @@ figures and the Data folder includes supplementary tables
 
 ### Systems view of gene regulation in the maize leaf ###
 
-![picture](Figures/R_notebooks/png_files/Figure1A_cartoon.png)
+![picture](notebooks/reports/png_files/Figure1A_cartoon.png)
 
 ### Summary ###
 Integration of 104 ChIP-seq experiments highlights TF binding redundancy and modularity as key properties of the regulatory network
